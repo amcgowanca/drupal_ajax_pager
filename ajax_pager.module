@@ -662,7 +662,7 @@ function theme_ajax_pager_link($variables) {
   }
 
   drupal_add_library('system', 'drupal.ajax');
-  $query_parameters = drupal_get_query_parameters();
+  $query_parameters = drupal_get_query_parameters($parameters);
   $number_of_items = max($ajax_pager_element, count(AjaxPagerDefault::$ajax_pager_elements[$ajax_pager_type]));
   if (!isset($query_parameters[$ajax_pager_type])) {
     $query_parameters[$ajax_pager_type] = array();
@@ -683,6 +683,7 @@ function theme_ajax_pager_link($variables) {
 
   $query_parameters[$ajax_pager_type][$ajax_pager_element] = $page_new;
   $query_parameters[$ajax_pager_type] = implode(',', $query_parameters[$ajax_pager_type]);
+  $query_parameters = array_merge($query_parameters, $parameters);
 
   // Set each pager link title
   if (!isset($attributes['title'])) {
