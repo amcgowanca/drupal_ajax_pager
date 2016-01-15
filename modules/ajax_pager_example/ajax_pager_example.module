@@ -1,0 +1,175 @@
+<?php
+/**
+ * @file
+ * An example of how to use the Ajax Pager module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function ajax_pager_example_menu() {
+  $items = array();
+  $items['ajax-pager/example'] = array(
+    'title' => 'Ajax Pager Example',
+    'description' => 'An example of using the ajax pager for pagination.',
+    'access arguments' => array('access content'),
+    'page callback' => 'ajax_pager_example_page',
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_ajax_pager_info().
+ */
+function ajax_pager_example_ajax_pager_info() {
+  return array(
+    'ajax_pager_example' => array(
+      'callback' => 'ajax_pager_example_callback',
+    ),
+  );
+}
+
+/**
+ * Callback for rendering multiple paginated tables of data.
+ *
+ * @see ajax_pager_example_menu().
+ */
+function ajax_pager_example_page() {
+  $content = array();
+  $query_parameters = drupal_get_query_parameters();
+  $table_instances = _ajax_pager_example_table_info();
+  if (isset($query_parameters['instance']) && isset($table_instances[$query_parameters['instance']])) {
+    $identifier = $query_parameters['instance'];
+    $element = $table_instances[$identifier];
+    $content['ajax_pager_example_' . $identifier] = _ajax_pager_example_build($identifier, $element);
+  }
+  else {
+    foreach ($table_instances as $identifier => $element) {
+      $content['ajax_pager_example_' . $identifier] = _ajax_pager_example_build($identifier, $element);
+    }
+  }
+  return $content;
+}
+
+/**
+ * Callback for the Ajax Pager type for rebuild and rendering.
+ *
+ * @return array
+ *   The selector and data to rebuild from the Ajax request.
+ *
+ * @see ajax_pager_example_ajax_pager_info().
+ * @see _ajax_pager_example_build().
+ */
+function ajax_pager_example_callback($arg) {
+  $info = _ajax_pager_example_table_info();
+  if (!isset($info[$arg])) {
+    return FALSE;
+  }
+
+  $return = array(
+    'selector' => '#ajax-pager-example-' . $arg,
+    'data' => _ajax_pager_example_build($arg, $info[$arg]),
+  );
+  return $return;
+}
+
+/**
+ * Builds an individual paginated data table with a wrapper element.
+ *
+ * @param string $id
+ *   The table identifier (e.g. "one").
+ *
+ * @param int $element
+ *   The table identifier for the page. This is primarily used for identifying
+ *   the element index of the page number within the query string. This value
+ *   is sent to the AjaxPagerDefault query selector for processing.
+ *
+ * @return array
+ *   A renderable array containing the paginated table and pager.
+ */
+function _ajax_pager_example_build($id, $element) {
+  $header = array(
+    array('data' => t('Identifier')),
+    array('data' => t('Type')),
+    array('data' => t('Value')),
+  );
+  $rows = array();
+
+  $pager_type = 'ajax';
+  $query_parameters = drupal_get_query_parameters();
+  if (!empty($query_parameters['pager_type'])) {
+    $pager_type = 'default' == $query_parameters['pager_type'] ? 'default' : 'ajax';
+  }
+
+  $query = db_select('ajax_pager_example', 't');
+  switch ($pager_type) {
+    case 'default':
+      $query = $query->extend('PagerDefault');
+      break;
+    case 'ajax':
+    default:
+      $query = $query->extend('AjaxPagerDefault')
+        ->setAjaxPagerType('ajax_pager_example', $element);
+      break;
+  }
+
+  $query->fields('t')
+    ->limit(10);
+  if ('one' == $id) {
+    $query->orderBy('t.id', 'ASC');
+  }
+  elseif ('two' == $id) {
+    $query->orderBy('t.id', 'DESC');
+  }
+  $results = $query->execute();
+  while ($result = $results->fetchObject()) {
+    $rows[] = array(
+      array('data' => $result->id),
+      array('data' => $result->type),
+      array('data' => $result->value),
+    );
+  }
+
+  $build = array(
+    'example_table' => array(
+      '#theme' => 'table',
+      '#header' => $header,
+      '#rows' => $rows,
+      '#empty' => t('There does not appear to be any data in the example database table.'),
+    ),
+    'example_table_pager' => array(),
+  );
+
+  switch ($pager_type) {
+    case 'default':
+      $build['example_table_pager'] = array(
+        '#theme' => 'pager',
+        '#element' => $element,
+      );
+      break;
+
+    case 'ajax':
+    default:
+      $build['#prefix'] = '<div id="ajax-pager-example-' . $id . '">';
+      $build['#suffix'] = '</div>';
+      $build['example_table_pager'] = array(
+        '#theme' => 'ajax_pager',
+        '#ajax_pager_type' => 'ajax_pager_example',
+        '#ajax_pager_element' => $element,
+        '#arguments' => array($id),
+      );
+      break;
+  }
+
+  return $build;
+}
+
+/**
+ * Returns an associative array of table instances with machine names and ids.
+ */
+function _ajax_pager_example_table_info() {
+  return array(
+    'one' => 0,
+    'two' => 1,
+  );
+}

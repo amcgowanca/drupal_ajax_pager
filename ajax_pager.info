@@ -1,0 +1,7 @@
+name = Ajax Pager
+description = A pager which integrates with the SelectQuery as a SelectQueryExtender allowing for ajax pagination to occur.
+core = 7.x
+version = 7.x-1.0
+package = Ajax Pager
+project = ajax_pager
+files[] = ajax_pager.test

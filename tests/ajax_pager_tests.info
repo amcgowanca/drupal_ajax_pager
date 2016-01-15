@@ -1,0 +1,8 @@
+name = Ajax Pager - Tests
+description = A collection of tests for the Ajax Pager module.
+core = 7.x
+version = 7.x-1.0
+package = Ajax Pager
+project = ajax_pager_tests
+dependencies[] = ajax_pager
+dependencies[] = simpletest

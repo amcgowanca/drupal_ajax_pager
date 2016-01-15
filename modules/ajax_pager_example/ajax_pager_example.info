@@ -1,0 +1,6 @@
+name = Ajax Pager Example
+description = An example module to demonstrate the Ajax Pager functionality.
+core = 7.x
+version = 7.x-1.0
+project = ajax_pager_example
+package = Ajax Pager

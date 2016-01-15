@@ -1,0 +1,55 @@
+<?php
+/**
+ * @file
+ * Installs and schema for the Ajax Pager Example.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function ajax_pager_example_schema() {
+  $schema = array();
+  $schema['ajax_pager_example'] = array(
+    'description' => 'A simple data table to provide sample data for the Ajax Pager example.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The primary key.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'type' => array(
+        'description' => 'A secondary table that is used to identify a "type" of this data.',
+        'type' => 'varchar',
+        'length' => 25,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'value' => array(
+        'description' => 'A value for this table to be displayed.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'type' => array('type'),
+    ),
+  );
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function ajax_pager_example_install() {
+  for ($i = 0; $i < 500; $i++) {
+    $data = (object) array(
+      'type' => 0 == ($i % 2) ? 'abc_type' : 'xyz_type',
+      'value' => drupal_random_key(),
+    );
+    drupal_write_record('ajax_pager_example', $data);
+  }
+}

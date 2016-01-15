@@ -1,0 +1,715 @@
+<?php
+/**
+ * @file
+ * ajax_pager.module
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function ajax_pager_menu() {
+  $items = array();
+  $items['ajax-pager/handler/ajax/%'] = array(
+    'title' => 'Ajax pager handler',
+    'description' => 'Callback handler for Ajax pager.',
+    'page callback' => 'ajax_pager_handler',
+    'page arguments' => array(2, 3),
+    'access callback' => TRUE,
+    'delivery callback' => 'ajax_deliver',
+    'type' => MENU_CALLBACK,
+  );
+  $items['ajax-pager/handler/nojs/%'] = array(
+    'title' => 'Ajax pager callback',
+    'description' => 'Callback handler for Ajax pager.',
+    'page callback' => 'ajax_pager_handler',
+    'page arguments' => array(2, 3),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Callback for Ajax pager execution.
+ *
+ * @param string $ajax
+ *   Contains the string `ajax` denoting an Ajax request or `nojs` to denote
+ *   when no javascript exists.
+ *
+ * @param string $ajax_pager_type
+ *   The Ajax pager type name for this request.
+ *
+ * @return mixed
+ */
+function ajax_pager_handler($ajax, $ajax_pager_type) {
+  $is_ajax = 'ajax' == $ajax ? TRUE : FALSE;
+  if (!$is_ajax) {
+    $query_parameters = drupal_get_query_parameters();
+    if (isset($query_parameters['original'])) {
+      $original_path = $query_parameters['original'];
+      unset($query_parameters['original']);
+      return drupal_goto($original_path, array('query' => $query_parameters));
+    }
+    return drupal_access_denied();
+  }
+
+  $commands = array();
+  if ($ajax_pager_info = ajax_pager_get_info($ajax_pager_type)) {
+    if (isset($ajax_pager_info['callback']) && is_callable($ajax_pager_info['callback'])) {
+      // Retrieve the arguments passed to the callback and remove the first two
+      // as they are related to the operation of the handler. However, all
+      // additional arguments should be passed to the callback.
+      $arguments = func_get_args();
+      for ($i = 0; $i < 2; $i++) {
+        array_shift($arguments);
+      }
+      // Invoke the callback and ensure that both the `selector` and `data`
+      // properties exist in the returned value.
+      $info = call_user_func_array($ajax_pager_info['callback'], $arguments);
+      if (!empty($info['selector']) && !empty($info['data'])) {
+        if (is_array($info['data'])) {
+          $info['data'] = drupal_render($info['data']);
+        }
+        $commands[] = ajax_command_replace($info['selector'], $info['data']);
+      }
+    }
+  }
+
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+
+/**
+ * Returns an array of registered Ajax Pager types.
+ *
+ * @param string $name
+ *   The machine name of the Ajax Pager to retrieve. Default value is NULL
+ *   which will return all pager types.
+ *
+ * @return mixed
+ *   Returns an array of all registered Ajax Pager types. If an Ajax Pager name
+ *   is specified, the returned value will be that of the pager type if it
+ *   exists otherwise NULL.
+ */
+function ajax_pager_get_info($name = NULL) {
+  static $ajax_pager_info = NULL;
+  if (NULL === $ajax_pager_info) {
+    $ajax_pager_info = array();
+    foreach (module_implements('ajax_pager_info') as $module) {
+      $return = module_invoke($module, 'ajax_pager_info');
+      if (!empty($return) && is_array($return)) {
+        foreach ($return as $type => $info) {
+          $ajax_pager_info[$type] = array(
+            'name' => $type
+          ) + $info;
+        }
+      }
+    }
+  }
+
+  if (!empty($name)) {
+    return isset($ajax_pager_info[$name]) ? $ajax_pager_info[$name] : FALSE;
+  }
+
+  return $ajax_pager_info;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function ajax_pager_theme() {
+  return array(
+    'ajax_pager' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'parameters' => array(),
+        'quantity' => 9,
+        'arguments' => array(),
+      ),
+    ),
+    'ajax_pager_first' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'text' => NULL,
+        'parameters' => array(),
+        'arguments' => array(),
+      ),
+    ),
+    'ajax_pager_previous' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'text' => NULL,
+        'interval' => 1,
+        'parameters' => array(),
+        'arguments' => array(),
+      ),
+    ),
+    'ajax_pager_next' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'text' => NULL,
+        'interval' => 1,
+        'parameters' => array(),
+        'arguments' => array(),
+      ),
+    ),
+    'ajax_pager_last' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'text' => NULL,
+        'parameters' => array(),
+        'arguments' => array(),
+      ),
+    ),
+    'ajax_pager_link' => array(
+      'variables' => array(
+        'ajax_pager_type' => '',
+        'ajax_pager_element' => 0,
+        'text' => NULL,
+        'page_new' => NULL,
+        'parameters' => array(),
+        'attributes' => array(),
+        'arguments' => array(),
+      ),
+    ),
+  );
+}
+
+/**
+ * Overrides the Drupal core PagerDefault class.
+ */
+class AjaxPagerDefault extends PagerDefault {
+  /**
+   * Static counter keyed by Ajax Pager name to identify number of pagers.
+   *
+   * @var array
+   */
+  public static $ajax_pager_elements = array();
+
+  /**
+   * The pager information.
+   *
+   * @var array
+   */
+  private $ajax_pager_info = NULL;
+
+  /**
+   * AjaxPagerDefault constructor.
+   */
+  public function __construct(SelectQueryInterface $query, DatabaseConnection $connection) {
+    parent::__construct($query, $connection);
+    // Add `ajax_pager` tag. Similarily to the PagerDefault::__construct(), we
+    // do this here to ensure its added before preExecute() is called. The
+    // Drupal core `pager` query is also added by calling parent constructor.
+    $this->addTag('ajax_pager');
+  }
+
+  /**
+   * Sets the Ajax Pager type.
+   *
+   * @param string $type_name
+   *   A valid ajax pager type.
+   * @param int $element
+   *   The element identifier for this pager. Default value is NULL.
+   *
+   * @return $this
+   *   Returns this AjaxPagerDefault instance.
+   *
+   * @throws \Exception
+   *   Thrown if no pager information exists for the specified type.
+   */
+  public function setAjaxPagerType($type_name, $element = NULL) {
+    $ajax_pager_info = ajax_pager_get_info($type_name);
+    if (!$ajax_pager_info) {
+      throw new Exception(t('The Ajax Pager type, @type, does not exist.', array('@type' => $type_name)));
+    }
+
+    $this->ajax_pager_info = $ajax_pager_info;
+    if (isset($element) && 0 <= $element) {
+      $this->ajax_pager_info['element'] = (int) $element;
+    }
+    return $this;
+  }
+
+  /**
+   * Overrides default implementation of PagerDefault::execute().
+   */
+  public function execute() {
+    if (!$this->preExecute($this)) {
+      return NULL;
+    }
+
+    if (empty($this->limit)) {
+      return;
+    }
+
+    $this->ensureElement();
+
+    $total_items = $this->getCountQuery()->execute()->fetchField();
+    $current_page = ajax_pager_default_initialize($this->ajax_pager_info, $total_items, $this->limit);
+    $this->range($current_page * $this->limit, $this->limit);
+
+    return $this->query->execute();
+  }
+
+  /**
+   * Overrides PagerDefault::ensureElement().
+   */
+  public function ensureElement() {
+    if (!isset(self::$ajax_pager_elements[$this->ajax_pager_info['name']])) {
+      self::$ajax_pager_elements[$this->ajax_pager_info['name']] = 0;
+    }
+
+    if (isset($this->ajax_pager_info['element'])) {
+      if (self::$ajax_pager_elements[$this->ajax_pager_info['name']] < $this->ajax_pager_info['element']) {
+        self::$ajax_pager_elements[$this->ajax_pager_info['name']] = $this->ajax_pager_info['element'];
+        self::$ajax_pager_elements[$this->ajax_pager_info['name']]++;
+      }
+    }
+    else {
+      $this->ajax_pager_info['element'] = self::$ajax_pager_elements[$this->ajax_pager_info['name']];
+      self::$ajax_pager_elements[$this->ajax_pager_info['name']]++;
+    }
+  }
+}
+
+/**
+ * Initializes an Ajax Pager for `theme('ajax_pager`, array( ... ))`.
+ *
+ * @param array $ajax_pager_info
+ *   The Ajax Pager's info.
+ * @param int $total
+ *   The total number of items to be paged.
+ * @param int $limit
+ *   The number of items that will be displayed per page.
+ *
+ * @return int
+ *   Returns the current page for this pager instance.
+ */
+function ajax_pager_default_initialize($ajax_pager_info, $total, $limit) {
+  global $ajax_pager_data;
+  // Initialize the $ajax_pager_data variable as an empty array if it has yet to
+  // be set prior.
+  if (!isset($ajax_pager_data)) {
+    $ajax_pager_data = array();
+  }
+
+  $page = ajax_pager_find_page($ajax_pager_info);
+
+  $data = array();
+  if (!isset($ajax_pager_data[$ajax_pager_info['name']])) {
+    $data += $ajax_pager_info;
+  }
+
+  $data['total_items'] = $total;
+  $data['total_pages'] = ceil($total / $limit);
+  $data['current_page'] = max(0, min($page, ((int) $data['total_pages']) - 1));
+  $data['limit'] = $limit;
+
+  $ajax_pager_data[$ajax_pager_info['name']][$ajax_pager_info['element']] = $data;
+
+  return $data['current_page'];
+}
+
+/**
+ * Returns the current page being requested for display within a pager.
+ *
+ * @param array $ajax_pager_info
+ *   The Ajax Pager type's instance info.
+ *
+ * @return int
+ *   The requested page number of this pager type instance.
+ *
+ * @see ajax_pager_default_initialize()
+ */
+function ajax_pager_find_page($ajax_pager_info) {
+  $query_parameters = drupal_get_query_parameters();
+  $query = isset($query_parameters[$ajax_pager_info['name']]) ? $query_parameters[$ajax_pager_info['name']] : '';
+  $page_array = explode(',', $query);
+  if (!isset($page_array[$ajax_pager_info['element']])) {
+    $page_array[$ajax_pager_info['element']] = 0;
+  }
+  return (int) $page_array[$ajax_pager_info['element']];
+}
+
+/**
+ * Returns HTML for an Ajax pager.
+ *
+ * @param array $variables
+ *   An associative array containing:
+ *     * ajax_pager_type: The pager type's machine name.
+ *     * ajax_pager_element: The pager instance identifier.
+ *     * parameters: An associative array of query string parameters.
+ *     * arguments: An array of URL friendly argument values which are passed
+ *       to the Ajax Pager type's callback.
+ *     * quantity: The maximum number of pages to list.
+ *
+ * @return string
+ *   The rendered HTML for this pager.
+ */
+function theme_ajax_pager($variables) {
+  global $ajax_pager_data;
+
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  // If the pager type is not specified and empty or if it does not exist within
+  // the global $ajax_pager_data array, return an empty string here.
+  if (empty($ajax_pager_type) || empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element])) {
+    return '';
+  }
+
+  $ajax_pager_info = $ajax_pager_data[$ajax_pager_type][$ajax_pager_element];
+  $pager_middle = ceil($variables['quantity'] / 2);
+  $pager_current = $ajax_pager_info['current_page'] + 1;
+  $pager_first = $pager_current - $pager_middle + 1;
+  $pager_last = $pager_current + $variables['quantity'] - $pager_middle;
+  $pager_max = $ajax_pager_info['total_pages'];
+
+  $i = $pager_first;
+  if ($pager_last > $pager_max) {
+    // Adjust "center" if at end of query.
+    $i = $i + ($pager_max - $pager_last);
+    $pager_last = $pager_max;
+  }
+  if ($i <= 0) {
+    // Adjust "center" if at start of query.
+    $pager_last = $pager_last + (1 - $i);
+    $i = 1;
+  }
+  // End of generation loop preparation.
+
+  $li_first = theme('ajax_pager_first', array(
+    'ajax_pager_type' => $ajax_pager_type,
+    'ajax_pager_element' => $ajax_pager_element,
+    'text' => t('« first'),
+    'parameters' => $variables['parameters'],
+    'arguments' => $variables['arguments'],
+  ));
+  $li_previous = theme('ajax_pager_previous', array(
+    'ajax_pager_type' => $ajax_pager_type,
+    'ajax_pager_element' => $ajax_pager_element,
+    'text' => t('‹ previous'),
+    'interval' => 1,
+    'parameters' => $variables['parameters'],
+    'arguments' => $variables['arguments'],
+  ));
+  $li_next = theme('ajax_pager_next', array(
+    'ajax_pager_type' => $ajax_pager_type,
+    'ajax_pager_element' => $ajax_pager_element,
+    'text' => t('next ›'),
+    'interval' => 1,
+    'parameters' => $variables['parameters'],
+    'arguments' => $variables['arguments'],
+  ));
+  $li_last = theme('ajax_pager_last', array(
+    'ajax_pager_type' => $ajax_pager_type,
+    'ajax_pager_element' => $ajax_pager_element,
+    'text' => t('last »'),
+    'parameters' => $variables['parameters'],
+    'arguments' => $variables['arguments'],
+  ));
+
+  if (1 < $ajax_pager_info['total_pages']) {
+    $items = array();
+    if ($li_first) {
+      $items[] = array(
+        'class' => array('pager-first'),
+        'data' => $li_first,
+      );
+    }
+    if ($li_previous) {
+      $items[] = array(
+        'class' => array('pager-previous'),
+        'data' => $li_previous,
+      );
+    }
+
+    if ($i != $pager_max) {
+      if ($i > 1) {
+        $items[] = array(
+          'class' => array('pager-ellipsis'),
+          'data' => '…',
+        );
+      }
+      // Now generate the actual pager piece.
+      for (; $i <= $pager_last && $i <= $pager_max; $i++) {
+        if ($i < $pager_current) {
+          $items[] = array(
+            'class' => array('pager-item'),
+            'data' => theme('ajax_pager_previous', array(
+              'ajax_pager_type' => $ajax_pager_type,
+              'ajax_pager_element' => $ajax_pager_element,
+              'text' => $i,
+              'interval' => ($pager_current - $i),
+              'parameters' => $variables['parameters'],
+              'arguments' => $variables['arguments'],
+            )),
+          );
+        }
+        if ($i == $pager_current) {
+          $items[] = array(
+            'class' => array('pager-current'),
+            'data' => $i,
+          );
+        }
+        if ($i > $pager_current) {
+          $items[] = array(
+            'class' => array('pager-item'),
+            'data' => theme('ajax_pager_next', array(
+              'ajax_pager_type' => $ajax_pager_type,
+              'ajax_pager_element' => $ajax_pager_element,
+              'text' => $i,
+              'interval' => ($i - $pager_current),
+              'parameters' => $variables['parameters'],
+              'arguments' => $variables['arguments'],
+            )),
+          );
+        }
+      }
+      if ($i < $pager_max) {
+        $items[] = array(
+          'class' => array('pager-ellipsis'),
+          'data' => '…',
+        );
+      }
+    }
+
+    if ($li_next) {
+      $items[] = array(
+        'class' => array('pager-next'),
+        'data' => $li_next,
+      );
+    }
+    if ($li_last) {
+      $items[] = array(
+        'class' => array('pager-last'),
+        'data' => $li_last,
+      );
+    }
+
+    return '<h2 class="element-invisible">' . t('Pages') . '</h2>' . theme('item_list', array(
+      'items' => $items,
+      'attributes' => array('class' => array('pager', 'ajax-pager')),
+    ));
+  }
+}
+
+/**
+ * Returns the HTML for the "first page" link in the pager.
+ *
+ * @see theme_ajax_pager().
+ */
+function theme_ajax_pager_first($variables) {
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  $parameters = $variables['parameters'];
+  $text = $variables['text'];
+  $arguments = $variables['arguments'];
+
+  global $ajax_pager_data;
+
+  $output = '';
+  if (!empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]) && 0 < $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page']) {
+    $output = theme('ajax_pager_link', array(
+      'ajax_pager_type' => $ajax_pager_type,
+      'ajax_pager_element' => $ajax_pager_element,
+      'text' => $text,
+      'page_new' => 0,
+      'parameters' => $parameters,
+      'arguments' => $arguments,
+    ));
+  }
+  return $output;
+}
+
+/**
+ * Returns the HTML for the "previous page" link in the pager.
+ *
+ * @see theme_ajax_pager().
+ */
+function theme_ajax_pager_previous($variables) {
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  $text = $variables['text'];
+  $interval = $variables['interval'];
+  $parameters = $variables['parameters'];
+  $arguments = $variables['arguments'];
+
+  global $ajax_pager_data;
+
+  $output = '';
+  if (!empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]) && 0 < $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page']) {
+    $new_page = $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page'] - $interval;
+    if (0 == $new_page) {
+      $output = theme('ajax_pager_first', array(
+        'ajax_pager_type' => $ajax_pager_type,
+        'ajax_pager_element' => $ajax_pager_element,
+        'text' => $text,
+        'parameters' => $parameters,
+        'arguments' => $arguments,
+      ));
+    }
+    else {
+      $output = theme('ajax_pager_link', array(
+        'ajax_pager_type' => $ajax_pager_type,
+        'ajax_pager_element' => $ajax_pager_element,
+        'text' => $text,
+        'page_new' => $new_page,
+        'parameters' => $parameters,
+        'arguments' => $arguments,
+      ));
+    }
+  }
+
+  return $output;
+}
+
+/**
+ * Returns the HTML for the "next page" link in the pager.
+ *
+ * @see theme_ajax_pager().
+ */
+function theme_ajax_pager_next($variables) {
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  $text = $variables['text'];
+  $interval = $variables['interval'];
+  $parameters = $variables['parameters'];
+  $arguments = $variables['arguments'];
+
+  global $ajax_pager_data;
+
+  $output = '';
+  if (!empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]) &&
+    $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page'] < ($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['total_pages'] - 1)) {
+    $next_page = $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page'] + $interval;
+    if ($next_page == ($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['total_pages'] - 1)) {
+      $output = theme('ajax_pager_last', array(
+        'ajax_pager_type' => $ajax_pager_type,
+        'ajax_pager_element' => $ajax_pager_element,
+        'text' => $text,
+        'parameters' => $parameters,
+        'arguments' => $arguments,
+      ));
+    }
+    else {
+      $output = theme('ajax_pager_link', array(
+        'ajax_pager_type' => $ajax_pager_type,
+        'ajax_pager_element' => $ajax_pager_element,
+        'text' => $text,
+        'page_new' => $next_page,
+        'parameters' => $parameters,
+        'arguments' => $arguments,
+      ));
+    }
+  }
+
+  return $output;
+}
+
+/**
+ * Returns the HTML for the "last page" link in the pager.
+ *
+ * @see theme_ajax_pager().
+ */
+function theme_ajax_pager_last($variables) {
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  $text = $variables['text'];
+  $parameters = $variables['parameters'];
+  $arguments = $variables['arguments'];
+
+  global $ajax_pager_data;
+
+  $output = '';
+  if (!empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]) && $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['current_page'] < ($ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['total_pages'] - 1)) {
+    $new_page = $ajax_pager_data[$ajax_pager_type][$ajax_pager_element]['total_pages'] - 1;
+    $output = theme('ajax_pager_link', array(
+      'ajax_pager_type' => $ajax_pager_type,
+      'ajax_pager_element' => $ajax_pager_element,
+      'text' => $text,
+      'page_new' => $new_page,
+      'parameters' => $parameters,
+      'arguments' => $arguments,
+    ));
+  }
+
+  return $output;
+}
+
+/**
+ * Returns the HTML for a link to a specific pager page.
+ *
+ * @see theme_ajax_pager().
+ */
+function theme_ajax_pager_link($variables) {
+  $ajax_pager_type = $variables['ajax_pager_type'];
+  $ajax_pager_element = $variables['ajax_pager_element'];
+  $text = $variables['text'];
+  $page_new = $variables['page_new'];
+  $parameters = $variables['parameters'];
+  $attributes = $variables['attributes'];
+  $arguments = $variables['arguments'];
+
+  global $ajax_pager_data;
+
+  if (empty($ajax_pager_data[$ajax_pager_type][$ajax_pager_element])) {
+    return '';
+  }
+
+  drupal_add_library('system', 'drupal.ajax');
+  $query_parameters = drupal_get_query_parameters();
+  $number_of_items = max($ajax_pager_element, count(AjaxPagerDefault::$ajax_pager_elements[$ajax_pager_type]));
+  if (!isset($query_parameters[$ajax_pager_type])) {
+    $query_parameters[$ajax_pager_type] = array();
+    for ($i = 0; $i < $number_of_items; $i++) {
+      $query_parameters[$ajax_pager_type][$i] = 0;
+    }
+  }
+  else {
+    $query_parameters[$ajax_pager_type] = explode(',', $query_parameters[$ajax_pager_type]);
+    if (count($query_parameters) < $number_of_items) {
+      for ($i = 0; $i < $number_of_items; $i++) {
+        if (!isset($query_parameters[$ajax_pager_type][$i])) {
+          $query_parameters[$ajax_pager_type][$i] = 0;
+        }
+      }
+    }
+  }
+
+  $query_parameters[$ajax_pager_type][$ajax_pager_element] = $page_new;
+  $query_parameters[$ajax_pager_type] = implode(',', $query_parameters[$ajax_pager_type]);
+
+  // Set each pager link title
+  if (!isset($attributes['title'])) {
+    static $titles = NULL;
+    if (!isset($titles)) {
+      $titles = array(
+        t('« first') => t('Go to first page'),
+        t('‹ previous') => t('Go to previous page'),
+        t('next ›') => t('Go to next page'),
+        t('last »') => t('Go to last page'),
+      );
+    }
+    if (isset($titles[$text])) {
+      $attributes['title'] = $titles[$text];
+    }
+    elseif (is_numeric($text)) {
+      $attributes['title'] = t('Go to page @number', array('@number' => $text));
+    }
+  }
+
+  $query_parameters['original'] = $_GET['q'];
+  $href_url = 'ajax-pager/handler/nojs/' . $ajax_pager_type;
+  if (!empty($arguments)) {
+    $href_url = $href_url . '/' . implode('/', $arguments);
+  }
+
+  $attributes['href'] = url($href_url, array('query' => $query_parameters));
+  $attributes['class'][] = 'use-ajax';
+  return '<a' . drupal_attributes($attributes) . '>' . check_plain($text) . '</a>';
+}

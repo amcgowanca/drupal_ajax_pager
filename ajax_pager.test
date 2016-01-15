@@ -1,0 +1,363 @@
+<?php
+/**
+ * @file
+ * Tests for Ajax Pager module's functionality.
+ */
+
+/**
+ * Tests for ajax pager and pagination functionality.
+ */
+class AjaxPagerFunctionalWebTestCase extends DrupalWebTestCase {
+  protected $paginated_table_instances = array();
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function getInfo() {
+    return array(
+      'name' => 'Ajax pager functionality',
+      'description' => 'Tests Ajax Pager functionality.',
+      'group' => 'Pager',
+    );
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function setUp() {
+    parent::setUp(array('ajax_pager', 'ajax_pager_example'));
+    // Clear all caches to ensure that the menu is updated.
+    drupal_flush_all_caches();
+    // Clear all example data from the example tables.
+    db_truncate('ajax_pager_example')->execute();
+    // Populate with a small subset of data.
+    // TODO: Due to the issue reported here: https://github.com/amcgowanca/drupal_ajax_pager/issues/1 we need limit the number of items paginated.
+    for ($i = 0; $i < 89; $i++) {
+      $data = (object) array(
+        'type' => 0 == ($i % 2) ? 'abc_type' : 'xyz_type',
+        'value' => drupal_random_key(),
+      );
+      drupal_write_record('ajax_pager_example', $data);
+    }
+  }
+
+  /**
+   * Tests the ajax pager functionality for a single instance.
+   */
+  public function testAjaxPager() {
+    $this->drupalGet('ajax-pager/example', array('query' => array('instance' => 'one')));
+    $wrapper_element = $this->xpath('//div[@id=:id]', array(':id' => 'ajax-pager-example-one'));
+    $this->assertTrue(!empty($wrapper_element), 'Wrapper element #ajax-pager-example-one found.');
+    // Verify the first page.
+    $current_page = 0;
+    $this->assertPagerItems('ajax-pager-example-one', 0);
+    // Verify any page but the first or last.
+    $current_page++;
+    $path_options = array(
+      'query' => array(
+        'ajax_pager_example' => $current_page,
+        'original' => 'ajax-pager/example',
+      ),
+    );
+    $this->drupalPostAjaxLink('ajax-pager/handler/ajax/ajax_pager_example/one', $path_options);
+    $this->assertPagerItems('ajax-pager-example-one', $current_page);
+    // Verify the last page.
+    $elements = $this->xpath('//div[@id=:id]/div/ul/li[contains(@class, :class)]/a', array(':class' => 'pager-last', ':id' => 'ajax-pager-example-one'));
+    preg_match('@ajax_pager_example=(\d+)@', $elements[0]['href'], $matches);
+    $current_page = (int) $matches[1];
+    $path_options = array(
+      'query' => array(
+        'ajax_pager_example' => $current_page,
+        'original' => 'ajax-pager/example',
+      ),
+    );
+    $this->drupalPostAjaxLink('ajax-pager/handler/ajax/ajax_pager_example/one', $path_options);
+    $this->assertPagerItems('ajax-pager-example-one', $current_page);
+  }
+
+  /**
+   * Tests the ajax pager functionality for multiple instances.
+   */
+  public function testMultipleAjaxPagers() {
+    $this->drupalGet('ajax-pager/example');
+    $instances = array('one' => 0, 'two' => 0);
+    // For each of the two tables displayed, verify the wrapper element and the
+    // first page of the paginated data's pager.
+    foreach ($instances as $name => $page) {
+      $wrapper_element = $this->xpath('//div[@id=:id]', array(':id' => 'ajax-pager-example-' . $name));
+      $this->assertTrue(!empty($wrapper_element), 'Wrapper element #ajax-pager-example-' . $name . ' found.');
+      $this->assertPagerItems('ajax-pager-example-' . $name, $instances[$name]);
+    }
+    // Increment the second table's current page, verifying the pager for each
+    // of the tabled data. This would assume that the first pager is on the
+    // first page and the second pager is the second.
+    $instances['two']++;
+    $path_options = array(
+      'query' => array(
+        'ajax_pager_example' => implode(',', $instances),
+        'original' => 'ajax-pager/example',
+      ),
+    );
+    $this->drupalPostAjaxLink('ajax-pager/handler/ajax/ajax_pager_example/two', $path_options);
+    foreach ($instances as $name => $current_page) {
+      $this->assertPagerItems('ajax-pager-example-' . $name, $current_page);
+    }
+    // Display the last page of the paginated data for the first table, verify
+    // that the first pager displays the last and the second is on the
+    // previously requested page.
+    $elements = $this->xpath('//div[@id=:id]/div/ul/li[contains(@class, :class)]/a', array(':class' => 'pager-last', ':id' => 'ajax-pager-example-one'));
+    preg_match('@ajax_pager_example=(\d+)@', $elements[0]['href'], $matches);
+    $instances['one'] = (int) $matches[1];
+    $path_options = array(
+      'query' => array(
+        'ajax_pager_example' => implode(',', $instances),
+        'original' => 'ajax-pager/example',
+      ),
+    );
+    $this->drupalPostAjaxLink('ajax-pager/handler/ajax/ajax_pager_example/one', $path_options);
+    foreach ($instances as $name => $current_page) {
+      $this->assertPagerItems('ajax-pager-example-' . $name, $current_page);
+    }
+  }
+
+  /**
+   * Asserts pager items and links.
+   *
+   * @param string $wrapper
+   *   The wrapper element's ID attribute.
+   *
+   * @param int $current_page
+   *   The current pager page the internal browser is on.
+   */
+  protected function assertPagerItems($wrapper, $current_page) {
+    $elements = $this->xpath('//div[@id=:id]/div/ul[@class=:class]/li', array(':class' => 'pager ajax-pager', ':id' => $wrapper));
+    $this->assertTrue(!empty($elements), 'Pager found for #' . $wrapper . '.');
+
+    // Make current page 1-based.
+    $current_page++;
+
+    // Extract first/previous and next/last items.
+    // first/previous only exist, if the current page is not the first.
+    if ($current_page > 1) {
+      $first = array_shift($elements);
+      $previous = array_shift($elements);
+    }
+    // next/last always exist, unless the current page is the last.
+    if ($current_page != count($elements)) {
+      $last = array_pop($elements);
+      $next = array_pop($elements);
+    }
+
+    // Verify items and links to pages.
+    foreach ($elements as $page => $element) {
+      // Make item/page index 1-based.
+      $page++;
+      if ($current_page == $page) {
+        $this->assertClass($element, 'pager-current', 'Item for current page has .pager-current class.');
+        $this->assertFalse(isset($element->a), 'Item for current page has no link.');
+      }
+      else {
+        $this->assertNoClass($element, 'pager-current', "Item for page $page has no .pager-current class.");
+        $this->assertClass($element, 'pager-item', "Item for page $page has .pager-item class.");
+        $this->assertTrue($element->a, "Link to page $page found.");
+        $this->assertNoClass($element->a, 'active', "Link to page $page is not active.");
+      }
+      unset($elements[--$page]);
+    }
+    // Verify that no other items remain untested.
+    $this->assertTrue(empty($elements), 'All expected items found.');
+
+    // Verify first/previous and next/last items and links.
+    if (isset($first)) {
+      $this->assertClass($first, 'pager-first', 'Item for first page has .pager-first class.');
+      $this->assertTrue($first->a, 'Link to first page found.');
+      $this->assertNoClass($first->a, 'active', 'Link to first page is not active.');
+    }
+    if (isset($previous)) {
+      $this->assertClass($previous, 'pager-previous', 'Item for first page has .pager-previous class.');
+      $this->assertTrue($previous->a, 'Link to previous page found.');
+      $this->assertNoClass($previous->a, 'active', 'Link to previous page is not active.');
+    }
+    if (isset($next)) {
+      $this->assertClass($next, 'pager-next', 'Item for next page has .pager-next class.');
+      $this->assertTrue($next->a, 'Link to next page found.');
+      $this->assertNoClass($next->a, 'active', 'Link to next page is not active.');
+    }
+    if (isset($last)) {
+      $this->assertClass($last, 'pager-last', 'Item for last page has .pager-last class.');
+      $this->assertTrue($last->a, 'Link to last page found.');
+      $this->assertNoClass($last->a, 'active', 'Link to last page is not active.');
+    }
+  }
+
+  /**
+   * Asserts that an element has a given class.
+   *
+   * @param SimpleXMLElement $element
+   *   The element to test.
+   * @param string $class
+   *   The class to assert.
+   * @param string $message
+   *   (optional) A verbose message to output.
+   */
+  protected function assertClass(SimpleXMLElement $element, $class, $message = NULL) {
+    if (!isset($message)) {
+      $message = "Class .$class found.";
+    }
+    $this->assertTrue(strpos($element['class'], $class) !== FALSE, $message);
+  }
+
+  /**
+   * Asserts that an element does not have a given class.
+   *
+   * @param SimpleXMLElement $element
+   *   The element to test.
+   * @param string $class
+   *   The class to assert.
+   * @param string $message
+   *   (optional) A verbose message to output.
+   */
+  protected function assertNoClass(SimpleXMLElement $element, $class, $message = NULL) {
+    if (!isset($message)) {
+      $message = "Class .$class not found.";
+    }
+    $this->assertTrue(strpos($element['class'], $class) === FALSE, $message);
+  }
+
+  /**
+   * Performs Ajax request for "clicking" an ajax-enabled link.
+   */
+  protected function drupalPostAjaxLink($path, array $options = array(), array $headers = array()) {
+    $content = $this->content;
+    $drupal_settings = $this->drupalSettings;
+
+    $extra_post = '';
+    foreach ($this->xpath('//*[@id]') as $element) {
+      $id = (string) $element['id'];
+      $extra_post .= '&' . urlencode('ajax_html_ids[]') . '=' . urlencode($id);
+    }
+
+    if (isset($drupal_settings['ajaxPageState'])) {
+      $extra_post .= '&' . urlencode('ajax_page_state[theme]') . '=' . urlencode($drupal_settings['ajaxPageState']['theme']);
+      $extra_post .= '&' . urlencode('ajax_page_state[theme_token]') . '=' . urlencode($drupal_settings['ajaxPageState']['theme_token']);
+      foreach ($drupal_settings['ajaxPageState']['css'] as $key => $value) {
+        $extra_post .= '&' . urlencode("ajax_page_state[css][$key]") . '=1';
+      }
+      foreach ($drupal_settings['ajaxPageState']['js'] as $key => $value) {
+        $extra_post .= '&' . urlencode("ajax_page_state[js][$key]") . '=1';
+      }
+    }
+
+    $options['absolute'] = TRUE;
+
+    $out = $this->curlExec(array(
+      CURLOPT_URL => url($path, $options),
+      CURLOPT_POST => TRUE,
+      CURLOPT_POSTFIELDS => $extra_post,
+      CURLOPT_HTTPHEADER => $headers,
+    ));
+    $this->refreshVariables();
+    if ($new = $this->checkForMetaRefresh()) {
+      $out = $new;
+    }
+
+    $this->verbose('POST request to: ' . $path .
+      '<hr />Ending URL: ' . $this->getUrl() .
+      '<hr />Post data: ' . $extra_post .
+      '<hr />' . $out);
+
+    $return = drupal_json_decode($out);
+    $this->assertIdentical($this->drupalGetHeader('X-Drupal-Ajax-Token'), '1', 'Ajax response header found.');
+
+    $ajax_settings = array();
+    if (!empty($return)) {
+      // ajax.js applies some defaults to the settings object, so do the same
+      // for what's used by this function.
+      $ajax_settings += array(
+        'method' => 'replaceWith',
+      );
+      // DOM can load HTML soup. But, HTML soup can throw warnings, suppress
+      // them.
+      $dom = new DOMDocument();
+      @$dom->loadHTML($content);
+      // XPath allows for finding wrapper nodes better than DOM does.
+      $xpath = new DOMXPath($dom);
+      foreach ($return as $command) {
+        switch ($command['command']) {
+          case 'settings':
+            $drupal_settings = drupal_array_merge_deep($drupal_settings, $command['settings']);
+            break;
+
+          case 'insert':
+            $wrapperNode = NULL;
+            if (0 === strpos($command['selector'], '#')) {
+              $wrapperNode = $xpath->query('//*[@id="' . substr($command['selector'], 1) . '"]')->item(0);
+            }
+
+            if ($wrapperNode) {
+              // ajax.js adds an enclosing DIV to work around a Safari bug.
+              $newDom = new DOMDocument();
+              // DOM can load HTML soup. But, HTML soup can throw warnings,
+              // suppress them.
+              $newDom->loadHTML('<div>' . $command['data'] . '</div>');
+              // Suppress warnings thrown when duplicate HTML IDs are
+              // encountered. This probably means we are replacing an element
+              // with the same ID.
+              $newNode = @$dom->importNode($newDom->documentElement->firstChild->firstChild, TRUE);
+              $method = isset($command['method']) ? $command['method'] : $ajax_settings['method'];
+              // The "method" is a jQuery DOM manipulation function. Emulate
+              // each one using PHP's DOMNode API.
+              switch ($method) {
+                case 'replaceWith':
+                  $wrapperNode->parentNode->replaceChild($newNode, $wrapperNode);
+                  break;
+                case 'append':
+                  $wrapperNode->appendChild($newNode);
+                  break;
+                case 'prepend':
+                  // If no firstChild, insertBefore() falls back to
+                  // appendChild().
+                  $wrapperNode->insertBefore($newNode, $wrapperNode->firstChild);
+                  break;
+                case 'before':
+                  $wrapperNode->parentNode->insertBefore($newNode, $wrapperNode);
+                  break;
+                case 'after':
+                  // If no nextSibling, insertBefore() falls back to
+                  // appendChild().
+                  $wrapperNode->parentNode->insertBefore($newNode, $wrapperNode->nextSibling);
+                  break;
+                case 'html':
+                  foreach ($wrapperNode->childNodes as $childNode) {
+                    $wrapperNode->removeChild($childNode);
+                  }
+                  $wrapperNode->appendChild($newNode);
+                  break;
+              }
+            }
+            break;
+
+          case 'updateBuildId':
+            $buildId = $xpath->query('//input[@name="form_build_id" and @value="' . $command['old'] . '"]')->item(0);
+            if ($buildId) {
+              $buildId->setAttribute('value', $command['new']);
+            }
+            break;
+        }
+      }
+      $content = $dom->saveHTML();
+    }
+    $this->drupalSetContent($content);
+    $this->drupalSetSettings($drupal_settings);
+
+    $verbose = 'AJAX POST request to: ' . $path;
+    $verbose .= '<hr />Ending URL: ' . $this->getUrl();
+    $verbose .= '<hr />' . $this->content;
+
+    $this->verbose($verbose);
+
+    return $return;
+  }
+}
+
+
